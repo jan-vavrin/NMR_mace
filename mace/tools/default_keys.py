@@ -10,6 +10,7 @@ class DefaultKeys(Enum):
     VIRIALS = "REF_virials"
     DIPOLE = "dipole"
     POLARIZABILITY = "polarizability"
+    NMR_SHIELDING = "nmr_shielding"
     HEAD = "head"
     CHARGES = "REF_charges"
     TOTAL_CHARGE = "total_charge"

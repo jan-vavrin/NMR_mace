@@ -87,7 +87,6 @@ def set_default_dtype(dtype: str) -> None:
 def get_change_of_basis() -> torch.Tensor:
     return CartesianTensor("ij=ji").reduced_tensor_products().change_of_basis
 
-
 def spherical_to_cartesian(t: torch.Tensor, change_of_basis: torch.Tensor):
     # Optionally handle device mismatch
     if change_of_basis.device != t.device:

@@ -38,6 +38,7 @@ def configure_model(
         "stress": compute_stress,
         "dipoles": args.compute_dipole,
         "polarizabilities": args.compute_polarizability,
+        "nmr_shieldings" : args.compute_nmr_shielding
     }
     logging.info(
         f"During training the following quantities will be reported: {', '.join([f'{report}' for report, value in output_args.items() if value])}"
@@ -67,7 +68,7 @@ def configure_model(
         args.std = atomic_inter_scale
 
     elif (args.mean is None or args.std is None) and (
-        args.model not in ("AtomicDipolesMACE", "AtomicDielectricMACE")
+        args.model not in ("AtomicDipolesMACE", "AtomicDielectricMACE", "NMRShieldingMACE")
     ):
         args.mean, args.std = modules.scaling_classes[args.scaling](
             train_loader, atomic_energies
@@ -313,6 +314,23 @@ def _build_model(
             ],
             MLP_irreps=o3.Irreps(args.MLP_irreps),
             use_polarizability=True,
+        )
+    
+    if args.model == "NMRShieldingMACE":
+        args.error_table = "NMRShieldingRMSE"
+        # std_df = modules.scaling_classes["rms_dipoles_scaling"](train_loader)
+        assert (
+            args.loss == "nmr_shielding"
+        ), "Use nmr_shielding loss with NMRShieldingMACE model"
+        assert args.error_table == "NMRShieldingRMSE", "Use error_table NMRShieldingRMSE with NMRShieldingMACE model"
+        return modules.NMRShieldingMACE(
+            **model_config,
+            correlation=args.correlation,
+            gate=modules.gate_dict[args.gate],
+            interaction_cls_first=modules.interaction_classes[
+                "RealAgnosticInteractionBlock"
+            ],
+            MLP_irreps=o3.Irreps(args.MLP_irreps),
         )
 
     if args.model == "EnergyDipolesMACE":

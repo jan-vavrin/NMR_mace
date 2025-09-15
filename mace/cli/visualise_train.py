@@ -104,6 +104,14 @@ error_type = {
             ("dipole", "Dipole per atom [Debye]"),
         ],
     ),
+    "NMRShieldingRMSE": (
+        [
+            ("rmse_shielding_per_atom", "RMSE sigma/atom [ppm]"),
+        ],
+        [
+            ("shielding", "Shielding per atom [ppm]"),
+        ],
+    ),
 }
 
 

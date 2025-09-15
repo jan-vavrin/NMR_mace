@@ -137,6 +137,11 @@ def valid_err_log(
         logging.info(
             f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:.4f}, RMSE_MU_per_atom={error_mu:.2f} me A, RMSE_polarizability_per_atom={error_polarizability:.2f} me A^2 / V",
         )
+    elif log_errors == "NMRShieldingRMSE":
+        error_sigma = eval_metrics["rmse_sigma_per_atom"]
+        logging.info(
+            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:.4f}, RMSE_SIGMA_per_atom={error_sigma:.2f} ppm",
+        )
     elif log_errors == "EnergyDipoleRMSE":
         error_e = eval_metrics["rmse_e_per_atom"] * 1e3
         error_f = eval_metrics["rmse_f"] * 1e3
@@ -598,6 +603,9 @@ class MACELoss(Metric):
         self.add_state(
             "delta_polarizability_per_atom", default=[], dist_reduce_fx="cat"
         )
+        self.add_state("nmr_shielding_computed", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("delta_nmr_shielding", default=[], dist_reduce_fx="cat")
+        self.add_state("delta_nmr_shielding_per_atom", default=[], dist_reduce_fx="cat")
 
     def update(self, batch, output):  # pylint: disable=arguments-differ
         loss = self.loss_fn(pred=output, ref=batch)
@@ -666,6 +674,25 @@ class MACELoss(Metric):
                 self.delta_polarizability,
                 batch.weight,
                 batch.polarizability_weight,
+                spread_quantity_vector=False,
+            )
+
+        if (
+            output.get("nmr_shielding") is not None
+            and batch.nmr_shielding is not None
+        ):
+            self.delta_nmr_shielding.append(
+                batch.nmr_shielding - output["nmr_shielding"]
+            )
+            self.delta_nmr_shielding_per_atom.append(
+                (batch.nmr_shielding - output["nmr_shielding"])
+                / (batch.ptr[1:] - batch.ptr[:-1]).unsqueeze(-1).unsqueeze(-1)
+            )
+            self.nmr_shielding_computed += filter_nonzero_weight(
+                batch,
+                self.delta_nmr_shielding,
+                batch.weight,
+                batch.nmr_shielding_weight,
                 spread_quantity_vector=False,
             )
 
@@ -744,5 +771,14 @@ class MACELoss(Metric):
                 delta_polarizability_per_atom
             )
             aux["q95_polarizability"] = compute_q95(delta_polarizability)
+        
+        if self.nmr_shielding_computed:
+            delta_nmr_shielding = self.convert(self.delta_nmr_shielding)
+            
+            aux["mae_nmr_shielding"] = compute_mae(delta_nmr_shielding)
+            aux["rmse_nmr_shielding"] = compute_rmse(delta_nmr_shielding)
+            aux["rmse_nmr_shielding_per_atom"] = compute_rmse(
+                delta_nmr_shielding_per_atom
+            )
 
         return aux["loss"], aux

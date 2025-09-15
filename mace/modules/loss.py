@@ -177,6 +177,22 @@ def weighted_mean_squared_error_polarizability(
 
 
 # ------------------------------------------------------------------------------
+# NMR shielding Loss Function
+# ------------------------------------------------------------------------------
+
+def weighted_mean_squared_error_nmr_shielding(
+    ref: Batch, pred: TensorDict, ddp: Optional[bool] = None) -> torch.Tensor:
+    num_atoms = ref.ptr[1:] - ref.ptr[:-1]  # shape: [n_graphs]
+
+    print(ref["nmr_shielding"])
+    print(pred["nmr_shieldings"])
+
+    raw_loss = torch.square(
+        (ref["nmr_shielding"] - pred["nmr_shieldings"]) / num_atoms
+    )
+    return reduce_loss(raw_loss, ddp)
+
+# ------------------------------------------------------------------------------
 # Conditional Losses for Forces
 # ------------------------------------------------------------------------------
 
@@ -561,6 +577,36 @@ class DipolePolarLoss(torch.nn.Module):
         return (
             f"{self.__class__.__name__}("
             f"dipole_weight={self.dipole_weight:.3f}, polarizability_weight={self.polarizability_weight:.3f})"
+        )
+
+
+class NMRShieldingLoss(torch.nn.Module):
+    def __init__(
+        self, nmr_shielding_weight=1.0
+    ) -> (
+        None
+    ):
+        super().__init__()
+        self.register_buffer(
+            "nmr_shielding_weight",
+            torch.tensor(nmr_shielding_weight, dtype=torch.get_default_dtype()),
+        )
+
+    def forward(
+        self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+    ) -> torch.Tensor:
+        loss_nmr_shielding = weighted_mean_squared_error_nmr_shielding(
+            ref, pred, ddp
+        )
+
+        return (
+            self.nmr_shielding_weight * loss_nmr_shielding
+        )
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}("
+            f"nmr_shielding_weight={self.nmr_shielding_weight:.3f})"
         )
 
 

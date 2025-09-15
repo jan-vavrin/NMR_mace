@@ -635,6 +635,10 @@ def get_loss_fn(
             dipole_weight=args.dipole_weight,
             polarizability_weight=args.polarizability_weight,
         )
+    elif args.loss == "nmr_shielding":
+        loss_fn = modules.NMRShieldingLoss(
+            nmr_shielding_weight=args.nmr_shielding_weight,
+        )
     elif args.loss == "energy_forces_dipole":
         assert dipole_only is False and compute_dipole is True
         loss_fn = modules.WeightedEnergyForcesDipoleLoss(
@@ -691,6 +695,13 @@ def get_swa(
         )
         logging.info(
             f"Stage Two (after {args.start_swa} epochs) with loss function: {loss_fn_energy}, dipole weight : {args.swa_dipole_weight}, polarizability weight : {args.swa_polarizability_weight}, and learning rate : {args.swa_lr}"
+        )
+    elif args.loss == "nmr_shielding":
+        loss_fn_energy = modules.NMRShieldingLoss(
+            nmr_shielding_weight=args.swa_nmr_shielding_weight,
+        )
+        logging.info(
+            f"Stage Two (after {args.start_swa} epochs) with loss function: {loss_fn_energy}, NMR shielding weight : {args.swa_nmr_shielding_weight}, and learning rate : {args.swa_lr}"
         )
     elif args.loss == "energy_forces_dipole":
         loss_fn_energy = modules.WeightedEnergyForcesDipoleLoss(

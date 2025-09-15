@@ -171,9 +171,14 @@ class MACECalculator(Calculator):
                 "stress",
                 "dipole",
             ]
+        elif model_type == "NMRShieldingMACE":
+            self.implemented_properties = [
+                "nmr_shielding",
+                "nmr_shielding_sh"
+            ]
         else:
             raise ValueError(
-                f"Give a valid model_type: [MACE, DipoleMACE, DipolePolarizabilityMACE, EnergyDipoleMACE], {model_type} not supported"
+                f"Give a valid model_type: [MACE, DipoleMACE, DipolePolarizabilityMACE, EnergyDipoleMACE, NMRShieldingMACE], {model_type} not supported"
             )
 
         if model_paths is not None:
@@ -369,6 +374,15 @@ class MACECalculator(Calculator):
                     "polarizability_sh": polarizability_sh,
                 }
             )
+        if model_type in ["NMRShieldingMACE"]:
+            nmr_shielding = torch.zeros(num_models, num_atoms, 3, 3, device=self.device)
+            nmr_shielding_sh = torch.zeros(num_models, num_atoms, 9, device=self.device)
+            dict_of_tensors.update(
+                {
+                    "nmr_shielding": nmr_shielding,
+                    "nmr_shielding_sh": nmr_shielding_sh,
+                }
+            )
         return dict_of_tensors
 
     def _atoms_to_batch(self, atoms):
@@ -455,6 +469,9 @@ class MACECalculator(Calculator):
                 ret_tensors["charges"][i] = out["charges"].detach()
                 ret_tensors["polarizability"][i] = out["polarizability"].detach()
                 ret_tensors["polarizability_sh"][i] = out["polarizability_sh"].detach()
+            if self.model_type == "NMRShieldingMACE":
+                ret_tensors["nmr_shielding"][i] = out["nmr_shielding"].detach()
+                ret_tensors["nmr_shielding_sh"][i] = out["nmr_shielding_sh"].detach()
             if self.model_type in ["MACE"]:
                 if out["atomic_stresses"] is not None:
                     ret_tensors.setdefault("atomic_stresses", []).append(
@@ -551,6 +568,16 @@ class MACECalculator(Calculator):
                 torch.mean(ret_tensors["polarizability_sh"], dim=0).cpu().numpy()
             )
 
+        if self.model_type in [
+            "NMRShieldingMACE",
+        ]:
+            self.results["nmr_shielding"] = (
+                torch.mean(ret_tensors["nmr_shielding"], dim=0).cpu().numpy()
+            )
+            self.results["nmr_shielding_sh"] = (
+                torch.mean(ret_tensors["nmr_shielding_sh"], dim=0).cpu().numpy()
+            )
+
     def get_dielectric_derivatives(self, atoms=None):
         if atoms is None and self.atoms is None:
             raise ValueError("atoms not set")
@@ -585,6 +612,32 @@ class MACECalculator(Calculator):
             return dipole_derivatives[0]
         del outputs, batch, atoms
         return dipole_derivatives
+    
+    def get_shielding_derivatives(self, atoms=None):
+        if atoms is None and self.atoms is None:
+            raise ValueError("atoms not set")
+        if atoms is None:
+            atoms = self.atoms
+        if self.model_type not in ["NMRShieldingMACE"]:
+            raise NotImplementedError(
+                "Only implemented for NMRShieldingMACE model"
+            )
+        batch = self._atoms_to_batch(atoms)
+        outputs = [
+            model(
+                self._clone_batch(batch).to_dict(),
+                compute_shielding_derivatives=True,
+                training=self.use_compile,
+            )
+            for model in self.models
+        ]
+        shielding_derivatives = [
+            output["dsigma_dr"].clone().detach().cpu().numpy() for output in outputs
+        ]
+        if self.num_models == 1:
+            return shielding_derivatives[0]
+        del outputs, batch, atoms
+        return shielding_derivatives
 
     def get_hessian(self, atoms=None):
         if atoms is None and self.atoms is None:

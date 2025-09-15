@@ -125,6 +125,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "DipoleMAE",
             "DipolePolarRMSE",
             "EnergyDipoleRMSE",
+            "NMRShieldingRMSE",
         ],
         default="PerAtomRMSE",
     )
@@ -143,6 +144,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "AtomicDipolesMACE",
             "AtomicDielectricMACE",
             "EnergyDipolesMACE",
+            "NMRShieldingMACE",
         ],
     )
     parser.add_argument(
@@ -573,6 +575,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=DefaultKeys.POLARIZABILITY.value,
     )
     parser.add_argument(
+        "--nmr_shielding_key",
+        help="Key of NMR shielding in training xyz",
+        type=str,
+        default=DefaultKeys.NMR_SHIELDING.value,
+    )
+    parser.add_argument(
         "--head_key",
         help="Key of head in training xyz",
         type=str,
@@ -645,6 +653,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "stress",
             "dipole",
             "dipole_polar",
+            "nmr_shielding",
             "huber",
             "universal",
             "energy_forces_dipole",
@@ -716,6 +725,20 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--polarizability_weight",
+        help="weight of polarizability loss",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
+        "--swa_nmr_shielding_weight",
+        "--stage_two_nmr_shielding_weight",
+        help="weight of NMR shielding after starting Stage Two (previously called swa)",
+        type=float,
+        default=1.0,
+        dest="swa_nmr_shielding_weight",
+    )
+    parser.add_argument(
+        "--nmr_shielding_weight",
         help="weight of polarizability loss",
         type=float,
         default=1.0,
@@ -1059,6 +1082,12 @@ def build_preprocess_arg_parser() -> argparse.ArgumentParser:
         help="Key of polarizability in training xyz",
         type=str,
         default=DefaultKeys.POLARIZABILITY.value,
+    )
+    parser.add_argument(
+        "--nmr_shielding_key",
+        help="Key of NMR shielding in training xyz",
+        type=str,
+        default=DefaultKeys.NMR_SHIELDING.value,
     )
     parser.add_argument(
         "--charges_key",

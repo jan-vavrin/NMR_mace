@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Type, Union
 import numpy as np
 import torch
 from e3nn import o3
+from e3nn.io import CartesianTensor
 from e3nn.util.jit import compile_mode
 
 from mace.modules.embeddings import GenericJointEmbedding
@@ -22,10 +23,12 @@ from .blocks import (
     InteractionBlock,
     LinearDipolePolarReadoutBlock,
     LinearDipoleReadoutBlock,
+    LinearNMRShieldingReadoutBlock,
     LinearNodeEmbeddingBlock,
     LinearReadoutBlock,
     NonLinearDipolePolarReadoutBlock,
     NonLinearDipoleReadoutBlock,
+    NonLinearNMRShieldingReadoutBlock,
     NonLinearReadoutBlock,
     RadialEmbeddingBlock,
     ScaleShiftBlock,
@@ -34,6 +37,7 @@ from .utils import (
     compute_dielectric_gradients,
     compute_fixed_charge_dipole,
     compute_fixed_charge_dipole_polar,
+    compute_nmr_shielding_gradients,
     get_atomic_virials_stresses,
     get_edge_vectors_and_lengths,
     get_outputs,
@@ -1410,5 +1414,241 @@ class EnergyDipolesMACE(torch.nn.Module):
             "displacement": displacement,
             "dipole": total_dipole,
             "atomic_dipoles": atomic_dipoles,
+        }
+        return output
+
+
+@compile_mode("script")
+class NMRShieldingMACE(torch.nn.Module):
+    def __init__(
+        self,
+        r_max: float,
+        num_bessel: int,
+        num_polynomial_cutoff: int,
+        max_ell: int,
+        interaction_cls: Type[InteractionBlock],
+        interaction_cls_first: Type[InteractionBlock],
+        num_interactions: int,
+        num_elements: int,
+        hidden_irreps: o3.Irreps,
+        MLP_irreps: o3.Irreps,
+        avg_num_neighbors: float,
+        atomic_numbers: List[int],
+        correlation: int,
+        gate: Optional[Callable],
+        atomic_energies: Optional[
+            None
+        ],  # Just here to make it compatible with energy models, MUST be None
+        apply_cutoff: bool = True,  # pylint: disable=unused-argument
+        use_reduced_cg: bool = True,  # pylint: disable=unused-argument
+        use_so3: bool = False,  # pylint: disable=unused-argument
+        distance_transform: str = "None",  # pylint: disable=unused-argument
+        radial_type: Optional[str] = "bessel",
+        radial_MLP: Optional[List[int]] = None,
+        cueq_config: Optional[Dict[str, Any]] = None,  # pylint: disable=unused-argument
+        oeq_config: Optional[Dict[str, Any]] = None,  # pylint: disable=unused-argument
+        edge_irreps: Optional[o3.Irreps] = None,  # pylint: disable=unused-argument
+    ):
+        super().__init__()
+        self.register_buffer(
+            "atomic_numbers", torch.tensor(atomic_numbers, dtype=torch.int64)
+        )
+        self.register_buffer("r_max", torch.tensor(r_max, dtype=torch.float64))
+        self.register_buffer(
+            "num_interactions", torch.tensor(num_interactions, dtype=torch.int64)
+        )
+
+        # Predefine buffers to be TorchScript-safe
+        self.register_buffer("change_of_basis", CartesianTensor("ij").reduced_tensor_products().change_of_basis)
+
+        assert atomic_energies is None
+
+        # Embedding
+        node_attr_irreps = o3.Irreps([(num_elements, (0, 1))])
+        node_feats_irreps = o3.Irreps([(hidden_irreps.count(o3.Irrep(0, 1)), (0, 1))])
+        self.node_embedding = LinearNodeEmbeddingBlock(
+            irreps_in=node_attr_irreps,
+            irreps_out=node_feats_irreps,
+            cueq_config=cueq_config
+        )
+        self.radial_embedding = RadialEmbeddingBlock(
+            r_max=r_max,
+            num_bessel=num_bessel,
+            num_polynomial_cutoff=num_polynomial_cutoff,
+            radial_type=radial_type,
+            distance_transform=distance_transform,
+            apply_cutoff=apply_cutoff,
+        )
+        edge_feats_irreps = o3.Irreps(f"{self.radial_embedding.out_dim}x0e")
+
+        sh_irreps = o3.Irreps.spherical_harmonics(max_ell)
+        num_features = hidden_irreps.count(o3.Irrep(0, 1))
+        interaction_irreps = (sh_irreps * num_features).sort()[0].simplify()
+        self.spherical_harmonics = o3.SphericalHarmonics(
+            sh_irreps, normalize=True, normalization="component"
+        )
+        if radial_MLP is None:
+            radial_MLP = [64, 64, 64]
+
+        # Interactions and readouts
+        inter = interaction_cls_first(
+            node_attrs_irreps=node_attr_irreps,
+            node_feats_irreps=node_feats_irreps,
+            edge_attrs_irreps=sh_irreps,
+            edge_feats_irreps=edge_feats_irreps,
+            target_irreps=interaction_irreps,
+            hidden_irreps=hidden_irreps,
+            avg_num_neighbors=avg_num_neighbors,
+            radial_MLP=radial_MLP,
+            cueq_config=cueq_config,
+            oeq_config=oeq_config
+        )
+        self.interactions = torch.nn.ModuleList([inter])
+
+        # Use the appropriate self connection at the first layer
+        use_sc_first = False
+        if "Residual" in str(interaction_cls_first):
+            use_sc_first = True
+
+        node_feats_irreps_out = inter.target_irreps
+        prod = EquivariantProductBasisBlock(
+            node_feats_irreps=node_feats_irreps_out,
+            target_irreps=hidden_irreps,
+            correlation=correlation,
+            num_elements=num_elements,
+            use_sc=use_sc_first,
+            cueq_config=cueq_config,
+            oeq_config=oeq_config,
+        )
+        self.products = torch.nn.ModuleList([prod])
+
+        self.readouts = torch.nn.ModuleList()
+        self.readouts.append(
+            LinearNMRShieldingReadoutBlock(hidden_irreps)
+        )
+
+        for i in range(num_interactions - 1):
+            hidden_irreps_out = hidden_irreps
+            inter = interaction_cls(
+                node_attrs_irreps=node_attr_irreps,
+                node_feats_irreps=hidden_irreps,
+                edge_attrs_irreps=sh_irreps,
+                edge_feats_irreps=edge_feats_irreps,
+                target_irreps=interaction_irreps,
+                hidden_irreps=hidden_irreps_out,
+                avg_num_neighbors=avg_num_neighbors,
+                edge_irreps=edge_irreps,
+                radial_MLP=radial_MLP,
+                cueq_config=cueq_config,
+                oeq_config=oeq_config,
+            )
+            self.interactions.append(inter)
+            prod = EquivariantProductBasisBlock(
+                node_feats_irreps=interaction_irreps,
+                target_irreps=hidden_irreps_out,
+                correlation=correlation,
+                num_elements=num_elements,
+                use_sc=True,
+                cueq_config=cueq_config,
+                oeq_config=oeq_config,
+            )
+            self.products.append(prod)
+            if i == num_interactions - 2:
+                self.readouts.append(
+                    NonLinearNMRShieldingReadoutBlock(
+                        hidden_irreps_out,
+                        MLP_irreps,
+                        gate,
+                    )
+                )
+                # print("Nonlinear irreps: ", hidden_irreps_out, MLP_irreps)
+                # exit()
+            else:
+                self.readouts.append(
+                    LinearNMRShieldingReadoutBlock(
+                        hidden_irreps
+                    )
+                )
+
+    def forward(
+        self,
+        data: Dict[str, torch.Tensor],
+        training: bool = False,  # pylint: disable=W0613
+        compute_force: bool = False,
+        compute_virials: bool = False,
+        compute_stress: bool = False,
+        compute_displacement: bool = False,
+        compute_nmr_shielding_derivatives: bool = False,  # no training on derivatives
+        compute_edge_forces: bool = False,  # pylint: disable=W0613
+        compute_atomic_stresses: bool = False,  # pylint: disable=W0613
+    ) -> Dict[str, Optional[torch.Tensor]]:
+        assert compute_force is False
+        assert compute_virials is False
+        assert compute_stress is False
+        assert compute_displacement is False
+        # Setup
+        data["node_attrs"].requires_grad_(True)
+        data["positions"].requires_grad_(True)
+        num_graphs = data["ptr"].numel() - 1
+        num_atoms = data["ptr"][1:] - data["ptr"][:-1]
+
+        # Embeddings
+        node_feats = self.node_embedding(data["node_attrs"])
+        vectors, lengths = get_edge_vectors_and_lengths(
+            positions=data["positions"],
+            edge_index=data["edge_index"],
+            shifts=data["shifts"],
+        )
+        edge_attrs = self.spherical_harmonics(vectors)
+        edge_feats, cutoff = self.radial_embedding(
+            lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
+        )
+
+        # Interactions
+        nmr_shielding_sh_contributions = []
+        nmr_shieldings = []
+        for interaction, product, readout in zip(
+            self.interactions, self.products, self.readouts
+        ):
+            node_feats, sc = interaction(
+                node_attrs=data["node_attrs"],
+                node_feats=node_feats,
+                edge_attrs=edge_attrs,
+                edge_feats=edge_feats,
+                edge_index=data["edge_index"],
+                cutoff=cutoff,
+            )
+
+            node_feats = product(
+                node_feats=node_feats,
+                sc=sc,
+                node_attrs=data["node_attrs"],
+            )
+
+            node_out = readout(node_feats)  # [n_nodes,]
+            nmr_shielding_sh_contributions.append(node_out.squeeze(-1))
+
+        nmr_shielding_sh_contributions = torch.stack(nmr_shielding_sh_contributions, dim=0)
+        nmr_shieldings_sh = torch.sum(nmr_shielding_sh_contributions, dim=0)
+
+        for sigma in nmr_shieldings_sh:
+            nmr_shieldings.append(spherical_to_cartesian(
+                sigma, self.change_of_basis
+                ))
+        
+        nmr_shieldings = torch.stack(nmr_shieldings, dim=0)
+
+        if compute_nmr_shielding_derivatives:
+            dsigma_dr = compute_nmr_shielding_gradients(
+                nmr_shieldings=nmr_shieldings,
+                positions=data["positions"],
+            )
+        else:
+            dsigma_dr = None
+
+        output = {
+            "nmr_shieldings": nmr_shieldings,
+            "nmr_shieldings_sh": nmr_shieldings_sh,
+            "dsigma_dr": dsigma_dr,
         }
         return output

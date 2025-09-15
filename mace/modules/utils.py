@@ -548,6 +548,56 @@ def compute_dielectric_gradients_loop(
     return gradients
 
 
+# TODO: unnecessary? does it even work?
+@torch.jit.ignore
+def compute_nmr_shielding_gradients(
+    nmr_shieldings: torch.Tensor,
+    positions: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    nmr_shieldings_flatten = nmr_shieldings.view(-1)
+
+    print(nmr_shieldings)
+    print(nmr_shieldings_flatten)
+
+    def get_vjp(v):
+        return torch.autograd.grad(
+            nmr_shieldings_flatten,
+            positions,
+            v,
+            retain_graph=True,
+            create_graph=True,
+            allow_unused=False,
+        )
+
+    try:
+        I_N = torch.eye(nmr_shieldings.shape[-1]).to(nmr_shieldings.device)
+        gradient = torch.vmap(get_vjp, in_dims=0, out_dims=0)(I_N)[0]
+    except RuntimeError:
+        gradient = compute_nmr_shielding_gradients_loop(nmr_shieldings, positions).detach()
+    if gradient is None:
+        return torch.zeros((positions.shape[0], nmr_shieldings.shape[-1], 3))
+    return gradient
+
+
+def compute_nmr_shielding_gradients_loop(
+    nmr_shieldings: torch.Tensor,
+    positions: torch.Tensor,
+) -> torch.Tensor:
+    gradients = []
+    for i in range(nmr_shieldings.shape[-1]):
+        grad_elem = nmr_shieldings[:, i]
+        hess_row = torch.autograd.grad(
+            grad_elem,
+            positions,
+            retain_graph=True,
+            create_graph=True,
+            allow_unused=False,
+        )[0]
+        gradients.append(hess_row)
+    gradients = torch.stack(gradients)
+    return gradients
+
+
 class InteractionKwargs(NamedTuple):
     lammps_class: Optional[torch.Tensor]
     lammps_natoms: Tuple[int, int] = (0, 0)

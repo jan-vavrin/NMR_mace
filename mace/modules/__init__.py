@@ -8,11 +8,13 @@ from .blocks import (
     InteractionBlock,
     LinearDipolePolarReadoutBlock,
     LinearDipoleReadoutBlock,
+    LinearNMRShieldingReadoutBlock,
     LinearNodeEmbeddingBlock,
     LinearReadoutBlock,
     NonLinearBiasReadoutBlock,
     NonLinearDipolePolarReadoutBlock,
     NonLinearDipoleReadoutBlock,
+    NonLinearNMRShieldingReadoutBlock,
     NonLinearReadoutBlock,
     RadialEmbeddingBlock,
     RealAgnosticAttResidualInteractionBlock,
@@ -26,6 +28,7 @@ from .blocks import (
 from .loss import (
     DipolePolarLoss,
     DipoleSingleLoss,
+    NMRShieldingLoss,
     UniversalLoss,
     WeightedEnergyForcesDipoleLoss,
     WeightedEnergyForcesL1L2Loss,
@@ -41,12 +44,14 @@ from .models import (
     AtomicDipolesMACE,
     EnergyDipolesMACE,
     ScaleShiftMACE,
+    NMRShieldingMACE,
 )
 from .radial import BesselBasis, GaussianBasis, PolynomialCutoff, ZBLBasis
 from .symmetric_contraction import SymmetricContraction
 from .utils import (
     compute_avg_num_neighbors,
     compute_dielectric_gradients,
+    compute_nmr_shielding_gradients,
     compute_fixed_charge_dipole,
     compute_fixed_charge_dipole_polar,
     compute_mean_rms_energy_forces,
@@ -95,8 +100,10 @@ __all__ = [
     "ScaleShiftBlock",
     "LinearDipoleReadoutBlock",
     "LinearDipolePolarReadoutBlock",
+    "LinearNMRShieldingReadoutBlock",
     "NonLinearDipoleReadoutBlock",
     "NonLinearDipolePolarReadoutBlock",
+    "NonLinearNMRShieldingReadoutBlock",
     "InteractionBlock",
     "NonLinearReadoutBlock",
     "PolynomialCutoff",
@@ -107,6 +114,7 @@ __all__ = [
     "AtomicDipolesMACE",
     "AtomicDielectricMACE",
     "EnergyDipolesMACE",
+    "NMRShieldingMACE",
     "WeightedEnergyForcesLoss",
     "WeightedForcesLoss",
     "WeightedEnergyForcesVirialsLoss",
@@ -124,4 +132,5 @@ __all__ = [
     "compute_fixed_charge_dipole",
     "compute_fixed_charge_dipole_polar",
     "compute_dielectric_gradients",
+    "compute_nmr_shielding_gradients",
 ]

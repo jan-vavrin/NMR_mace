@@ -235,7 +235,7 @@ class LinearDipolePolarReadoutBlock(torch.nn.Module):
         else:
             raise ValueError(
                 "Invalid configuration for LinearDipolePolarReadoutBlock: "
-                "use_polarizability must be either True."
+                "use_polarizability must be True."
                 "If you want to calculate only the dipole, use AtomicDipolesMACE."
             )
 
@@ -267,9 +267,76 @@ class NonLinearDipolePolarReadoutBlock(torch.nn.Module):
         else:
             raise ValueError(
                 "Invalid configuration for NonLinearDipolePolarReadoutBlock: "
-                "use_polarizability must be either True."
+                "use_polarizability must be True."
                 "If you want to calculate only the dipole, use AtomicDipolesMACE."
             )
+        irreps_scalars = o3.Irreps(
+            [(mul, ir) for mul, ir in MLP_irreps if ir.l == 0 and ir in self.irreps_out]
+        )
+        irreps_gated = o3.Irreps(
+            [(mul, ir) for mul, ir in MLP_irreps if ir.l > 0 and ir in self.irreps_out]
+        )
+        irreps_gates = o3.Irreps([mul, "0e"] for mul, _ in irreps_gated)
+        self.equivariant_nonlin = nn.Gate(
+            irreps_scalars=irreps_scalars,
+            act_scalars=[gate for _, ir in irreps_scalars],
+            irreps_gates=irreps_gates,
+            act_gates=[gate] * len(irreps_gates),
+            irreps_gated=irreps_gated,
+        )
+        self.irreps_nonlin = self.equivariant_nonlin.irreps_in.simplify()
+        self.linear_1 = Linear(
+            irreps_in=irreps_in, irreps_out=self.irreps_nonlin, cueq_config=cueq_config
+        )
+        self.linear_2 = Linear(
+            irreps_in=self.hidden_irreps,
+            irreps_out=self.irreps_out,
+            cueq_config=cueq_config,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # [n_nodes, irreps]  # [..., ]
+        x = self.equivariant_nonlin(self.linear_1(x))
+        return self.linear_2(x)  # [n_nodes, 1]
+
+# ???
+
+@compile_mode("script")
+class LinearNMRShieldingReadoutBlock(torch.nn.Module):
+    def __init__(
+        self,
+        irreps_in: o3.Irreps,
+        cueq_config: Optional[CuEquivarianceConfig] = None,
+        oeq_config: Optional[OEQConfig] = None,  # pylint: disable=unused-argument
+    ):
+        super().__init__()
+        print("You will calculate NMR shielding tensors.")
+        self.irreps_out = o3.Irreps("1x0e + 1x1o + 1x2e")
+
+        self.linear = Linear(
+            irreps_in=irreps_in, irreps_out=self.irreps_out, cueq_config=cueq_config
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # [n_nodes, irreps]  # [..., ]
+        y = self.linear(x)  # [n_nodes, 1]
+        return y  # [n_nodes, 1]
+
+
+@compile_mode("script")
+class NonLinearNMRShieldingReadoutBlock(torch.nn.Module):
+    def __init__(
+        self,
+        irreps_in: o3.Irreps,
+        MLP_irreps: o3.Irreps,
+        gate: Callable,
+        cueq_config: Optional[CuEquivarianceConfig] = None,
+        oeq_config: Optional[OEQConfig] = None,  # pylint: disable=unused-argument
+    ):
+        super().__init__()
+        
+        print("You will calculate NMR shielding tensors.")
+        self.irreps_out = o3.Irreps("1x0e + 1x1o + 1x2e")
+        
+        self.hidden_irreps = MLP_irreps
         irreps_scalars = o3.Irreps(
             [(mul, ir) for mul, ir in MLP_irreps if ir.l == 0 and ir in self.irreps_out]
         )
